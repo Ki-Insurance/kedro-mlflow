@@ -250,6 +250,7 @@ class MlflowHook:
                     experiment_id=self.mlflow_config.tracking.experiment._experiment.experiment_id,
                     run_name=run_name,
                     nested=self.mlflow_config.tracking.run.nested,
+                    log_system_metrics=False  # stops recursive logging of system metrics
                 )
                 self.run_id = mlflow.active_run().info.run_id
                 self._logger.info(
@@ -406,6 +407,7 @@ class MlflowHook:
                         pipeline=pipeline.inference,
                         catalog=catalog,
                         input_name=pipeline.input_name,
+                        hooks=pipeline.hooks,
                         **pipeline.kpm_kwargs,
                     )
                     artifacts = kedro_pipeline_model.extract_pipeline_artifacts(
@@ -442,7 +444,9 @@ class MlflowHook:
                     f"The run '{mlflow.active_run().info.run_id}' was already opened before launching 'kedro run' so it is not closed. You should close it manually."
                 )
             else:
-                mlflow.end_run()
+                # we opened a run for each node, so we must close them all
+                while mlflow.active_run():
+                    mlflow.end_run()
 
         else:
             switch_catalog_logging(catalog, True)

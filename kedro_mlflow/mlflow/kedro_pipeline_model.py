@@ -6,14 +6,28 @@ from pathlib import Path
 from typing import Optional, Union
 
 from kedro.framework.hooks import _create_hook_manager
-from kedro.io import DataCatalog, MemoryDataset
+from kedro import __version__
+from kedro.io import DataCatalog, MemoryDataset, CatalogProtocol
 from kedro.pipeline import Pipeline
 from kedro.runner import AbstractRunner, SequentialRunner
 from kedro.utils import load_obj
 from kedro_datasets.pickle import PickleDataset
-from mlflow.pyfunc import PythonModel
+from mlflow.pyfunc.model import PythonModel
 
+from kedro.framework.context import KedroContext
 from kedro_mlflow.pipeline.pipeline_ml import PipelineML
+from unittest.mock import MagicMock
+from typing import Any
+
+
+class KedroMockContext(KedroContext):
+    @property
+    def catalog(self) -> CatalogProtocol:
+        return self.catalog
+
+    @property
+    def params(self) -> dict[str, Any]:
+        return {}
 
 
 class KedroPipelineModel(PythonModel):
@@ -24,6 +38,7 @@ class KedroPipelineModel(PythonModel):
         input_name: str,
         runner: Optional[AbstractRunner] = None,
         copy_mode: Optional[Union[dict[str, str], str]] = "assign",
+        hooks: Optional[list] = None,
     ):
         """[summary]
 
@@ -54,6 +69,7 @@ class KedroPipelineModel(PythonModel):
         self.pipeline = (
             pipeline.inference if isinstance(pipeline, PipelineML) else pipeline
         )
+        self.hooks = hooks or []
         self.input_name = input_name
         self.initial_catalog = self._extract_pipeline_catalog(catalog)
 
@@ -66,11 +82,31 @@ class KedroPipelineModel(PythonModel):
         self.output_name = list(self.pipeline.outputs())[0]
         self.runner = runner or SequentialRunner()
         self.copy_mode = copy_mode or {}
+        self.run_params = {
+            "project_path": Path.cwd().as_posix(),
+            "env": "serving",
+            "kedro_version": str(__version__),
+            "tags": [],
+            "from_nodes": [],
+            "to_nodes": [],
+            "node_names": [],
+            "from_inputs": [],
+            "load_versions": [],
+            "pipeline_name": "serving",
+            "extra_params": {},
+        }
         # copy mode has been converted because it is a property
         # TODO: we need to use the runner's default dataset in case of multithreading
         self.loaded_catalog = DataCatalog(
             datasets={
-                name: MemoryDataset(copy_mode=copy_mode)
+                name: MemoryDataset(
+                    copy_mode=copy_mode,
+                    metadata=(
+                        catalog._datasets[name].metadata
+                        if name in catalog._datasets
+                        else None
+                    ),
+                )
                 for name, copy_mode in self.copy_mode.items()
             }
         )
@@ -181,7 +217,7 @@ class KedroPipelineModel(PythonModel):
         # but we rely on a mlflow function for saving, and it is unaware of kedro
         # pipeline structure
         mlflow_artifacts_keys = set(context.artifacts.keys())
-        kedro_artifacts_keys = set(self.pipeline.inputs() - {self.input_name})
+        kedro_artifacts_keys = set((self.pipeline.inputs() - {self.input_name}))
         if mlflow_artifacts_keys != kedro_artifacts_keys:
             in_artifacts_but_not_inference = (
                 mlflow_artifacts_keys - kedro_artifacts_keys
@@ -226,8 +262,7 @@ class KedroPipelineModel(PythonModel):
             self.loaded_catalog[name].save(updated_catalog.load(name))
 
     def predict(self, context, model_input, params=None):
-        # we create an empty hook manager but do NOT register hooks
-        # because we want this model be executable outside of a kedro project
+        hook_manager = self._init_hooks()
 
         # params can pass
         # TODO globals
@@ -251,9 +286,6 @@ class KedroPipelineModel(PythonModel):
             )()  # do not forget to instantiate the class with ending ()
         )
 
-        hook_manager = _create_hook_manager()
-        # _register_hooks(hook_manager, predict_params.hooks)
-
         for name, value in params.items():
             # no need to check if params are in the catalog, because mlflow already checks that the params matching the signature
             param = f"params:{name}"
@@ -265,10 +297,23 @@ class KedroPipelineModel(PythonModel):
         runtime_catalog = deepcopy(self.loaded_catalog)
         runtime_catalog[self.input_name].save(model_input)
 
+        hook_manager.hook.before_pipeline_run(
+            run_params=self.run_params,
+            pipeline=self.pipeline,
+            catalog=self.loaded_catalog,
+        )
+
         run_output = runner.run(
             pipeline=self.pipeline,
             catalog=runtime_catalog,
             hook_manager=hook_manager,
+        )
+
+        hook_manager.hook.after_pipeline_run(
+            run_params=self.run_params,
+            run_result=run_output,
+            pipeline=self.pipeline,
+            catalog=self.loaded_catalog,
         )
 
         # unpack the result to avoid messing the json
@@ -276,6 +321,33 @@ class KedroPipelineModel(PythonModel):
         unpacked_output = run_output[self.output_name].load()
 
         return unpacked_output
+
+    def _init_hooks(self):
+        hook_manager = _create_hook_manager()
+        for hook in self.hooks:
+            hook_manager.register(hook())
+        # TODO: decide what to do about catalog_created and context_created
+        # whether to mock up or placehold missing values or skip the hook calls
+        # hook_manager.hook.after_catalog_created(
+        #     catalog = self.loaded_catalog,
+        #     conf_catalog = {},
+        #     conf_creds = {},
+        #     feed_dict = {},
+        #     save_version = "",
+        #     load_versions = {},
+        # )
+
+        hook_manager.hook.after_context_created(
+            context=KedroMockContext(
+                "./",
+                MagicMock(),
+                "serving",
+                "",
+                hook_manager,
+                None
+            )
+        )
+        return hook_manager
 
 
 class KedroPipelineModelError(Exception):
