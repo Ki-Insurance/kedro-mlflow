@@ -90,7 +90,10 @@ class PipelineML(Pipeline):
         log_model_kwargs = log_model_kwargs or {}
         self.log_model_kwargs = {**self.LOG_MODEL_KWARGS_DEFAULT, **log_model_kwargs}
         self.hooks = hooks
-        self._check_consistency()
+
+        # skip consistency check if VertexAIPipelinesRunner is used -- fixes mismatch when running using --nodes
+        if type(kpm_kwargs['runner']).__qualname__ != "VertexAIPipelinesRunner":
+            self._check_consistency()
 
     @property
     def _logger(self) -> Logger:
