@@ -1,3 +1,4 @@
+import os
 from logging import Logger, getLogger
 from typing import Iterable, Optional, Union
 
@@ -91,8 +92,9 @@ class PipelineML(Pipeline):
         self.log_model_kwargs = {**self.LOG_MODEL_KWARGS_DEFAULT, **log_model_kwargs}
         self.hooks = hooks
 
-        # skip consistency check if VertexAIPipelinesRunner is used -- fixes mismatch when running using --nodes
-        if type(kpm_kwargs['runner']).__qualname__ != "VertexAIPipelinesRunner":
+        # skip consist ency check if logging to a remote MLFlow server, implying that we're not running locally.
+        # this fixes issues when running in a distributed environment where we run using the argument --nodes and consistency fails.
+        if os.getenv("MLFLOW_TRACKING_URI", "file:///").startswith("file:///"):
             self._check_consistency()
 
     @property
