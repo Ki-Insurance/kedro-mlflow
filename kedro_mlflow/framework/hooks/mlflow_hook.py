@@ -438,49 +438,51 @@ class MlflowHook:
                         "Deferring mlflow model logging: required artifacts are not all materialized yet: %s",
                         missing_artifacts,
                     )
-                else:
-                    # Materialize dataset factories (side-effect call, keeps behavior)
-                    for dataset in pipeline.datasets():
-                        catalog.exists(dataset)
+                    # Do not attempt to build or log artifacts when some are missing.
+                    return
 
-                    with TemporaryDirectory() as tmp_dir:
-                        # This will be removed at the end of the context manager,
-                        # but we need to log in mlflow before moving the folder
-                        kedro_pipeline_model = KedroPipelineModel(
-                            pipeline=pipeline.inference,
-                            catalog=catalog,
-                            input_name=pipeline.input_name,
-                            hooks=pipeline.hooks,
-                            **pipeline.kpm_kwargs,
-                        )
-                        artifacts = kedro_pipeline_model.extract_pipeline_artifacts(
-                            parameters_saving_folder=Path(tmp_dir)
-                        )
+                # Materialize dataset factories (side-effect call, keeps behavior)
+                for dataset in pipeline.datasets():
+                    catalog.exists(dataset)
 
-                        log_model_kwargs = pipeline.log_model_kwargs.copy()
-                        model_signature = log_model_kwargs.pop("signature", None)
-                        if isinstance(model_signature, str):
-                            if model_signature == "auto":
-                                input_data = catalog.load(pipeline.input_name)
+                with TemporaryDirectory() as tmp_dir:
+                    # This will be removed at the end of the context manager,
+                    # but we need to log in mlflow before moving the folder
+                    kedro_pipeline_model = KedroPipelineModel(
+                        pipeline=pipeline.inference,
+                        catalog=catalog,
+                        input_name=pipeline.input_name,
+                        hooks=pipeline.hooks,
+                        **pipeline.kpm_kwargs,
+                    )
+                    artifacts = kedro_pipeline_model.extract_pipeline_artifacts(
+                        parameters_saving_folder=Path(tmp_dir)
+                    )
 
-                                # all pipeline params will be overridable at predict time: https://mlflow.org/docs/latest/model/signatures.html#model-signatures-with-inference-params
-                                # I add the special "runner" parameter to be able to choose it at runtime
-                                pipeline_params = {
-                                                      ds_name[7:]: catalog.load(ds_name)
-                                                      for ds_name in pipeline.inference.inputs()
-                                                      if ds_name.startswith("params:")
-                                                  } | {"runner": "SequentialRunner"}
-                                model_signature = infer_signature(
-                                    model_input=input_data,
-                                    params=pipeline_params,
-                                )
+                    log_model_kwargs = pipeline.log_model_kwargs.copy()
+                    model_signature = log_model_kwargs.pop("signature", None)
+                    if isinstance(model_signature, str):
+                        if model_signature == "auto":
+                            input_data = catalog.load(pipeline.input_name)
 
-                        mlflow.pyfunc.log_model(
-                            python_model=kedro_pipeline_model,
-                            artifacts=artifacts,
-                            signature=model_signature,
-                            **log_model_kwargs,
-                        )
+                            # all pipeline params will be overridable at predict time: https://mlflow.org/docs/latest/model/signatures.html#model-signatures-with-inference-params
+                            # I add the special "runner" parameter to be able to choose it at runtime
+                            pipeline_params = {
+                                                  ds_name[7:]: catalog.load(ds_name)
+                                                  for ds_name in pipeline.inference.inputs()
+                                                  if ds_name.startswith("params:")
+                                              } | {"runner": "SequentialRunner"}
+                            model_signature = infer_signature(
+                                model_input=input_data,
+                                params=pipeline_params,
+                            )
+
+                    mlflow.pyfunc.log_model(
+                        python_model=kedro_pipeline_model,
+                        artifacts=artifacts,
+                        signature=model_signature,
+                        **log_model_kwargs,
+                    )
 
                 # Materialize dataset factories
                 for dataset in pipeline.datasets():
