@@ -97,6 +97,14 @@ class PipelineML(Pipeline):
         if os.getenv("MLFLOW_TRACKING_URI", "file:///").startswith("file:///"):
             self._check_consistency()
 
+        # Store final node name of the full training pipeline to help orchestrators
+        # decide when it is safe to log the model (e.g., only on the last chunk).
+        try:
+            ordered_nodes = list(self.nodes)
+            self._final_node_name = ordered_nodes[-1].name if ordered_nodes else None
+        except Exception:
+            self._final_node_name = None
+
     @property
     def _logger(self) -> Logger:
         return getLogger(__name__)
@@ -108,6 +116,15 @@ class PipelineML(Pipeline):
     @property
     def inference(self) -> str:
         return self._inference
+
+    @property
+    def final_node_name(self) -> Optional[str]:
+        """Name of the last node (topological order) of the training pipeline.
+
+        This is computed at creation time from the full training nodes list and
+        can be used later to decide if a partial run is the last chunk.
+        """
+        return self._final_node_name
 
     @inference.setter
     def inference(self, inference: Pipeline) -> None:
