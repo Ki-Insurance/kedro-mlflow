@@ -299,22 +299,7 @@ class KedroPipelineModel(PythonModel):
                 except Exception:
                     pass
 
-            # Load artifact content from the (possibly local) updated_catalog
-            value = updated_catalog.load(name)
-
-            # Do NOT persist artifacts back to their original storage during
-            # model load. Persisting could trigger remote writes (e.g., GCS)
-            # and fail due to orchestrator permissions, while MLflow already
-            # provides local files for artifacts. Instead, materialize them
-            # as in-memory datasets for the loaded model lifecycle.
-            try:
-                # Replace target dataset with an in-memory one holding the value
-                self.loaded_catalog[name] = MemoryDataset()
-                self.loaded_catalog[name].save(value)
-            except Exception:
-                # Fallback: if catalog replacement is not allowed, attempt to save
-                # into the existing dataset (legacy behavior)
-                self.loaded_catalog[name].save(value)
+            self.loaded_catalog[name].save(updated_catalog.load(name))
 
     def predict(self, context, model_input, params=None):
         hook_manager = self._init_hooks()
