@@ -259,6 +259,11 @@ class KedroPipelineModel(PythonModel):
                 except Exception:
                     # Fallback to raw string if Path handling is problematic
                     updated_catalog[name]._filepath = rest  # type: ignore[attr-defined]
+                # Ensure remote protocol is preserved when URI carries a non-file scheme
+                try:
+                    updated_catalog[name]._protocol = scheme  # type: ignore[attr-defined]
+                except Exception:
+                    pass
             else:
                 # in mlflow <2.21, we could just do "Path(uri)"
                 # but in mlflow >=2.21, we should do "Path.from_uri()" but according to this: https://github.com/python/cpython/issues/107465
@@ -286,6 +291,13 @@ class KedroPipelineModel(PythonModel):
                     path_uri = Path(uri)
 
                 updated_catalog[name]._filepath = path_uri
+                # Force local protocol for local artifact paths to avoid treating
+                # '/tmp/...' as a remote bucket name under gs/s3, which would
+                # generate calls like b/tmp/o
+                try:
+                    updated_catalog[name]._protocol = "file"  # type: ignore[attr-defined]
+                except Exception:
+                    pass
 
             self.loaded_catalog[name].save(updated_catalog.load(name))
 
