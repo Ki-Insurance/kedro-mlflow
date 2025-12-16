@@ -396,27 +396,27 @@ class MlflowHook:
         """
         if self._is_mlflow_enabled:
             if isinstance(pipeline, PipelineML):
-                # Gate logging to the last chunk when running with --nodes
+                # Log artifacts only on the last chunk when running using --nodes
                 try:
                     current_final = pipeline.nodes[-1].name if pipeline.nodes else None
-                    expected_final = getattr(pipeline, "final_node_name", None)
+                    final_nodes = getattr(pipeline, "final_nodes", None)
                 except Exception:
-                    current_final, expected_final = None, None
+                    current_final, final_nodes = None, None
 
                 is_partial_run = bool(run_params.get("node_names"))
 
-                self._logger.warning("!!!???!!!")
-                self._logger.info(f"current_final: {current_final}")
-                self._logger.info(f"expected_final: {expected_final}")
-                self._logger.info(f"is_partial_run: {is_partial_run}")
+                self._logger.error("!!!???!!!")
+                self._logger.error(f"current_final: {current_final}")
+                self._logger.error(f"final_nodes: {final_nodes}")
+                self._logger.error(f"is_partial_run: {is_partial_run}")
 
-                if is_partial_run and (not current_final or not expected_final or current_final != expected_final):
-                    self._logger.info(
-                        "Deferring mlflow model logging: not the last chunk (current_final=%s, expected_final=%s)",
-                        current_final,
-                        expected_final,
-                    )
-                    return
+                if is_partial_run and final_nodes:
+                    if not current_final or current_final not in final_nodes:
+                        self._logger.info(
+                            "Deferring mlflow model logging: not the last chunk (current_final=%s)",
+                            current_final,
+                        )
+                        return
 
                 # Materialize dataset factories (side-effect call, keeps behavior)
                 for dataset in pipeline.datasets():
