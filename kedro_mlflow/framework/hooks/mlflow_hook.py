@@ -404,27 +404,17 @@ class MlflowHook:
                     current_final, expected_final = None, None
 
                 is_partial_run = bool(run_params.get("node_names"))
+
+                self._logger.warning("!!!???!!!")
+                self._logger.info(f"current_final: {current_final}")
+                self._logger.info(f"expected_final: {expected_final}")
+                self._logger.info(f"is_partial_run: {is_partial_run}")
+
                 if is_partial_run and (not current_final or not expected_final or current_final != expected_final):
                     self._logger.info(
                         "Deferring mlflow model logging: not the last chunk (current_final=%s, expected_final=%s)",
                         current_final,
                         expected_final,
-                    )
-                    return
-
-                # Ensure all inference-required artifacts exist before logging
-                required_artifacts = [
-                    ds_name
-                    for ds_name in pipeline.inference.inputs()
-                    if ds_name != pipeline.input_name and not ds_name.startswith("params:")
-                ]
-                missing_artifacts = [
-                    ds_name for ds_name in required_artifacts if not catalog.exists(ds_name)
-                ]
-                if missing_artifacts:
-                    self._logger.info(
-                        "Deferring mlflow model logging: required artifacts are not all materialized yet: %s",
-                        missing_artifacts,
                     )
                     return
 
