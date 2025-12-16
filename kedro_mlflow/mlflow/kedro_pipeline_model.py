@@ -202,10 +202,23 @@ class KedroPipelineModel(PythonModel):
                     )
                 else:
                     # In this second case, we know it cannot be a MemoryDataset
-                    # weird bug when directly converting PurePosixPath to windows: it is considered as relative
-                    artifact_path = (
-                        Path(dataset._filepath.as_posix()).resolve().as_uri()
-                    )
+                    # Preserve non-local protocols (e.g. gs://, s3://) when building the artifact URI
+                    # to avoid converting them into local file paths.
+                    protocol = getattr(dataset, "_protocol", "file")
+                    try:
+                        # Some datasets expose a helper returning the backend save path (without scheme)
+                        save_path = dataset._get_save_path()  # type: ignore[attr-defined]
+                    except Exception:
+                        # Fallback to the raw filepath if helper is not available
+                        save_path = dataset._filepath.as_posix()  # type: ignore[attr-defined]
+
+                    if protocol and protocol != "file":
+                        artifact_path = f"{protocol}://{save_path}"
+                    else:
+                        # weird bug when directly converting PurePosixPath to windows: it is considered as relative
+                        artifact_path = (
+                            Path(save_path).resolve().as_uri()
+                        )
 
                 artifacts[name] = artifact_path
 
@@ -233,32 +246,47 @@ class KedroPipelineModel(PythonModel):
 
         updated_catalog = deepcopy(self.initial_catalog)
         for name, uri in context.artifacts.items():
-            # in mlflow <2.21, we could just do "Path(uri)"
-            # but in mlflow >=2.21, we should do "Path.from_uri()" but according to this: https://github.com/python/cpython/issues/107465
-            # this only works from python>=3.13
-            # TODO REMOVE THIS HACK WHEN PYTHON >= 3.13 IS THE LOWER BOUND
-            # the bug loks like:
-            #   >>> uri = "file:///C:/Users/username/Documents/file.txt"
-            #   >>> path_uri=Path("file:/C:/Users/username/Documents/file.txt")
-            #   >>> posix_path=path_uri.as_posix() # file:/C:/Users/username/Documents/file.txt" #
-            # notice "file:/"" pathprefix
-
-            posix_path = Path(uri).as_posix()
-            if re.match(pattern=r"file:/\w+", string=posix_path):
-                self._logger.warning(
-                    f"The URI '{uri}' is considered relative : {uri}(due to windows specific bug), retrying conversion"
-                )
-
-                # we remove the "file:/" prefix on windows
-                # and "file:" on posix systems (keep the slash prefix)
-                path_uri = (
-                    Path(posix_path[6:]) if os.name == "nt" else Path(posix_path[5:])
-                )
-
+            # For file:// URIs keep current behavior (convert to local path).
+            # For remote schemes (e.g. gs://, s3://), preserve the scheme and
+            # set the dataset filepath to the scheme-less key, letting the existing
+            # dataset protocol handle the access.
+            if isinstance(uri, str) and "://" in uri and not uri.startswith("file://"):
+                scheme, rest = uri.split("://", 1)
+                # keep catalog dataset protocol as configured, only update filepath
+                # to the backend path (bucket/key, etc.).
+                try:
+                    updated_catalog[name]._filepath = Path(rest)
+                except Exception:
+                    # Fallback to raw string if Path handling is problematic
+                    updated_catalog[name]._filepath = rest  # type: ignore[attr-defined]
             else:
-                path_uri = Path(uri)
+                # in mlflow <2.21, we could just do "Path(uri)"
+                # but in mlflow >=2.21, we should do "Path.from_uri()" but according to this: https://github.com/python/cpython/issues/107465
+                # this only works from python>=3.13
+                # TODO REMOVE THIS HACK WHEN PYTHON >= 3.13 IS THE LOWER BOUND
+                # the bug loks like:
+                #   >>> uri = "file:///C:/Users/username/Documents/file.txt"
+                #   >>> path_uri=Path("file:/C:/Users/username/Documents/file.txt")
+                #   >>> posix_path=path_uri.as_posix() # file:/C:/Users/username/Documents/file.txt" #
+                # notice "file:/"" pathprefix
 
-            updated_catalog[name]._filepath = path_uri
+                posix_path = Path(uri).as_posix()
+                if re.match(pattern=r"file:/\w+", string=posix_path):
+                    self._logger.warning(
+                        f"The URI '{uri}' is considered relative : {uri}(due to windows specific bug), retrying conversion"
+                    )
+
+                    # we remove the "file:/" prefix on windows
+                    # and "file:" on posix systems (keep the slash prefix)
+                    path_uri = (
+                        Path(posix_path[6:]) if os.name == "nt" else Path(posix_path[5:])
+                    )
+
+                else:
+                    path_uri = Path(uri)
+
+                updated_catalog[name]._filepath = path_uri
+
             self.loaded_catalog[name].save(updated_catalog.load(name))
 
     def predict(self, context, model_input, params=None):
