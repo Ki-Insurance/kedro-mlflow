@@ -404,7 +404,7 @@ class MlflowHook:
                     self._logger.info("Deferring mlflow model logging: KM_DO_LOG is not set for this chunk")
                     return
 
-                # Materialize dataset factories (side-effect call, keeps behavior)
+                # Materialize dataset factories
                 for dataset in pipeline.datasets():
                     catalog.exists(dataset)
 
@@ -428,7 +428,8 @@ class MlflowHook:
                         if model_signature == "auto":
                             input_data = catalog.load(pipeline.input_name)
 
-                            # all pipeline params will be overridable at predict time
+                            # all pipeline params will be overridable at predict time: https://mlflow.org/docs/latest/model/signatures.html#model-signatures-with-inference-params
+                            # I add the special "runner" parameter to be able to choose it at runtime
                             pipeline_params = {
                                 ds_name[7:]: catalog.load(ds_name)
                                 for ds_name in pipeline.inference.inputs()
@@ -445,8 +446,6 @@ class MlflowHook:
                         signature=model_signature,
                         **log_model_kwargs,
                     )
-
-                # (removed duplicate logging block)
             # Close the mlflow active run at the end of the pipeline to avoid interactions with further runs
             if self._already_active_mlflow:
                 self._logger.warning(
