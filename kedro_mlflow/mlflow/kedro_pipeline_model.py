@@ -198,7 +198,7 @@ class KedroPipelineModel(PythonModel):
                     artifact_path = absolute_param_path.as_uri()
                     self._logger.info(
                         f"The parameter '{name[7:]}' is persisted (as pickle) "
-                        "at the following location: f'{artifact_path}'"
+                        f"at the following location: '{artifact_path}'"
                     )
                 else:
                     # In this second case, we know it cannot be a MemoryDataset
