@@ -396,27 +396,13 @@ class MlflowHook:
         """
         if self._is_mlflow_enabled:
             if isinstance(pipeline, PipelineML):
-                # Log artifacts only on the last chunk when running using --nodes
-                try:
-                    current_final = pipeline.nodes[-1].name if pipeline.nodes else None
-                    final_nodes = getattr(pipeline, "final_nodes", None)
-                except Exception:
-                    current_final, final_nodes = None, None
-
+                # Orchestrator marks only the final chunk with KM_DO_LOG=true
+                # For partial runs (--nodes), skip unless KM_DO_LOG=true
                 is_partial_run = bool(run_params.get("node_names"))
-
-                self._logger.error("!!!???!!!")
-                self._logger.error(f"current_final: {current_final}")
-                self._logger.error(f"final_nodes: {final_nodes}")
-                self._logger.error(f"is_partial_run: {is_partial_run}")
-
-                if is_partial_run and final_nodes:
-                    if not current_final or current_final not in final_nodes:
-                        self._logger.info(
-                            "Deferring mlflow model logging: not the last chunk (current_final=%s)",
-                            current_final,
-                        )
-                        return
+                do_log = os.environ.get("KM_DO_LOG", "").lower() == "true"
+                if is_partial_run and not do_log:
+                    self._logger.info("Deferring mlflow model logging: KM_DO_LOG is not set for this chunk")
+                    return
 
                 # Materialize dataset factories (side-effect call, keeps behavior)
                 for dataset in pipeline.datasets():
