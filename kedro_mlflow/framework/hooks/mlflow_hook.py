@@ -249,8 +249,7 @@ class MlflowHook:
                     run_id=self.mlflow_config.tracking.run.id,
                     experiment_id=self.mlflow_config.tracking.experiment._experiment.experiment_id,
                     run_name=run_name,
-                    nested=self.mlflow_config.tracking.run.nested,
-                    log_system_metrics=False  # stops recursive logging of system metrics
+                    nested=self.mlflow_config.tracking.run.nested
                 )
                 self.run_id = mlflow.active_run().info.run_id
                 self._logger.info(
