@@ -401,10 +401,6 @@ class MlflowHook:
                 is_partial_run = bool(run_params.get("node_names"))
                 do_log = os.environ.get("KM_DO_LOG", "").lower() == "true"
 
-                self._logger.error(f"!!! is_partial_run {is_partial_run} !!!")
-                self._logger.error(f"!!! KM_DO_LOG {os.environ.get('KM_DO_LOG', '').lower()} !!!")
-                self._logger.error(f"!!! do_log {do_log} !!!")
-
                 if is_partial_run and not do_log:
                     self._logger.info("Deferring mlflow model logging: KM_DO_LOG is not set for this chunk")
                     return
