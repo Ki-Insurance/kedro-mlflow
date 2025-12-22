@@ -3,7 +3,7 @@ import os
 import re
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import fsspec
 from kedro.framework.hooks import _create_hook_manager
@@ -18,6 +18,7 @@ from mlflow.pyfunc.model import PythonModel
 from kedro.framework.context import KedroContext
 from kedro_mlflow.pipeline.pipeline_ml import PipelineML
 from unittest.mock import MagicMock
+from typing import Any
 
 
 class KedroMockContext(KedroContext):
