@@ -3,8 +3,9 @@ import os
 import re
 from copy import deepcopy
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
+import fsspec
 from kedro.framework.hooks import _create_hook_manager
 from kedro import __version__
 from kedro.io import DataCatalog, MemoryDataset, CatalogProtocol
@@ -17,7 +18,6 @@ from mlflow.pyfunc.model import PythonModel
 from kedro.framework.context import KedroContext
 from kedro_mlflow.pipeline.pipeline_ml import PipelineML
 from unittest.mock import MagicMock
-from typing import Any
 
 
 class KedroMockContext(KedroContext):
@@ -202,22 +202,12 @@ class KedroPipelineModel(PythonModel):
                     )
                 else:
                     # In this second case, we know it cannot be a MemoryDataset
-                    # Preserve non-local protocols (e.g. gs://, s3://) when building the artifact URI
-                    # to avoid converting them into local file paths.
-                    protocol = getattr(dataset, "_protocol", "file")
-                    try:
-                        # Some datasets expose a helper returning the backend save path (without scheme)
-                        save_path = dataset._get_save_path()  # type: ignore[attr-defined]
-                    except Exception:
-                        # Fallback to the raw filepath if helper is not available
-                        save_path = dataset._filepath.as_posix()  # type: ignore[attr-defined]
-
-                    if protocol and protocol != "file":
-                        artifact_path = f"{protocol}://{save_path}"
+                    # weird bug when directly converting PurePosixPath to windows: it is considered as relative
+                    if hasattr(dataset, "_protocol") and dataset._protocol != "file":
+                        artifact_path = f"{dataset._protocol}://{dataset._filepath.as_posix()}"
                     else:
-                        # weird bug when directly converting PurePosixPath to windows: it is considered as relative
                         artifact_path = (
-                            Path(save_path).resolve().as_uri()
+                            Path(dataset._filepath.as_posix()).resolve().as_uri()
                         )
 
                 artifacts[name] = artifact_path
@@ -246,58 +236,45 @@ class KedroPipelineModel(PythonModel):
 
         updated_catalog = deepcopy(self.initial_catalog)
         for name, uri in context.artifacts.items():
-            # For file:// URIs keep current behavior (convert to local path).
-            # For remote schemes (e.g. gs://, s3://), preserve the scheme and
-            # set the dataset filepath to the scheme-less key, letting the existing
-            # dataset protocol handle the access.
-            if isinstance(uri, str) and "://" in uri and not uri.startswith("file://"):
-                scheme, rest = uri.split("://", 1)
-                # keep catalog dataset protocol as configured, only update filepath
-                # to the backend path (bucket/key, etc.).
-                try:
-                    updated_catalog[name]._filepath = Path(rest)
-                except Exception:
-                    # Fallback to raw string if Path handling is problematic
-                    updated_catalog[name]._filepath = rest  # type: ignore[attr-defined]
-                # Ensure remote protocol is preserved when URI carries a non-file scheme
-                try:
-                    updated_catalog[name]._protocol = scheme  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-            else:
-                # in mlflow <2.21, we could just do "Path(uri)"
-                # but in mlflow >=2.21, we should do "Path.from_uri()" but according to this: https://github.com/python/cpython/issues/107465
-                # this only works from python>=3.13
-                # TODO REMOVE THIS HACK WHEN PYTHON >= 3.13 IS THE LOWER BOUND
-                # the bug loks like:
-                #   >>> uri = "file:///C:/Users/username/Documents/file.txt"
-                #   >>> path_uri=Path("file:/C:/Users/username/Documents/file.txt")
-                #   >>> posix_path=path_uri.as_posix() # file:/C:/Users/username/Documents/file.txt" #
-                # notice "file:/"" pathprefix
+            # in mlflow <2.21, we could just do "Path(uri)"
+            # but in mlflow >=2.21, we should do "Path.from_uri()" but according to this: https://github.com/python/cpython/issues/107465
+            # this only works from python>=3.13
+            # TODO REMOVE THIS HACK WHEN PYTHON >= 3.13 IS THE LOWER BOUND
+            # the bug loks like:
+            #   >>> uri = "file:///C:/Users/username/Documents/file.txt"
+            #   >>> path_uri=Path("file:/C:/Users/username/Documents/file.txt")
+            #   >>> posix_path=path_uri.as_posix() # file:/C:/Users/username/Documents/file.txt" #
+            # notice "file:/"" pathprefix
 
+            # 1. Detect if it's a remote URI (e.g. gs://, s3://)
+            if isinstance(uri, str) and "://" in uri and not uri.startswith("file://"):
+                protocol, path_str = uri.split("://", 1)
+                path_uri = Path(path_str)
+            else:
+                protocol = "file"
+                # Handle local file URIs and potential windows bugs
                 posix_path = Path(uri).as_posix()
                 if re.match(pattern=r"file:/\w+", string=posix_path):
                     self._logger.warning(
                         f"The URI '{uri}' is considered relative : {uri}(due to windows specific bug), retrying conversion"
                     )
-
                     # we remove the "file:/" prefix on windows
                     # and "file:" on posix systems (keep the slash prefix)
                     path_uri = (
                         Path(posix_path[6:]) if os.name == "nt" else Path(posix_path[5:])
                     )
-
                 else:
-                    path_uri = Path(uri)
+                    # Strip file:// if present, otherwise Path(uri) is fine
+                    if isinstance(uri, str) and uri.startswith("file://"):
+                        path_uri = Path(uri[7:])
+                    else:
+                        path_uri = Path(uri)
 
-                updated_catalog[name]._filepath = path_uri
-                # Force local protocol for local artifact paths to avoid treating
-                # '/tmp/...' as a remote bucket name under gs/s3, which would
-                # generate calls like b/tmp/o
-                try:
-                    updated_catalog[name]._protocol = "file"  # type: ignore[attr-defined]
-                except Exception:
-                    pass
+            dataset = updated_catalog[name]
+            dataset._filepath = path_uri
+            dataset._protocol = protocol
+            if hasattr(dataset, "_fs"):
+                dataset._fs = fsspec.filesystem(protocol)
 
             self.loaded_catalog[name].save(updated_catalog.load(name))
 
